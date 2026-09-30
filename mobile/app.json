@@ -1,0 +1,54 @@
+{
+  "expo": {
+    "name": "Scam Firewall",
+    "slug": "scamfirewall",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0F172A"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.scamfirewall.app",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Scam Firewall uses the camera to scan QR codes and analyze suspicious screenshots.",
+        "NSPhotoLibraryUsageDescription": "Scam Firewall needs access to photos to analyze suspicious screenshots and invoices you upload."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0F172A"
+      },
+      "package": "com.scamfirewall.app",
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.READ_EXTERNAL_STORAGE"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow Scam Firewall to access your photos to analyze suspicious screenshots and invoices.",
+          "cameraPermission": "Allow Scam Firewall to use your camera to scan QR codes and documents."
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}

@@ -1,0 +1,452 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =============== ENUMS ===============
+enum UserRole {
+  CONSUMER
+  FAMILY_MANAGER
+  ENTERPRISE_ADMIN
+  FRAUD_ANALYST
+  SUPPORT
+}
+
+enum AgeBand {
+  UNDER_18
+  AGE_18_29
+  AGE_30_49
+  AGE_50_64
+  AGE_65_PLUS
+}
+
+enum EventChannel {
+  CALL
+  SMS
+  EMAIL
+  MESSAGING
+  LINK
+  QR_CODE
+  INVOICE
+  PAYMENT
+  LOGIN_PROMPT
+  HIGH_RISK_ACTION
+}
+
+enum ScamType {
+  BANK_IMPERSONATION
+  GOVERNMENT_IMPERSONATION
+  TECH_SUPPORT
+  PARCEL_DELIVERY
+  KYC_PHISHING
+  ROMANCE
+  INVESTMENT
+  CRYPTO_TRANSFER
+  PAYMENT_DIVERSION
+  OTP_HARVESTING
+  FAKE_INVOICE
+  REMOTE_ACCESS
+  UNKNOWN
+}
+
+enum RiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum InterventionAction {
+  EXPLAIN
+  WARN
+  STRONG_WARN
+  REQUIRE_OFFLINE_VERIFICATION
+  ESCALATE_TRUSTED_CONTACT
+  SHOW_RECOVERY
+}
+
+enum SignalType {
+  TECHNICAL
+  MANIPULATION
+  CONTEXTUAL
+  CHANNEL
+}
+
+enum EventStatus {
+  PENDING
+  ANALYZING
+  ANALYZED
+  ESCALATED
+  RECOVERING
+  RESOLVED
+  DISMISSED
+}
+
+enum EscalationStatus {
+  PENDING
+  ACKNOWLEDGED
+  ACTIONED
+  CLOSED
+}
+
+enum RecoveryTaskStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  SKIPPED
+}
+
+// =============== USERS / AUTH ===============
+model User {
+  id             String   @id @default(uuid())
+  email          String   @unique
+  passwordHash   String
+  fullName       String
+  ageBand        AgeBand?
+  language       String   @default("en")
+  country        String   @default("US")
+  role           UserRole @default(CONSUMER)
+  elderMode      Boolean  @default(false)
+  onboardedAt    DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  deletedAt      DateTime?
+
+  riskProfile     UserRiskProfile?
+  sessions        Session[]
+  scamEvents      ScamEvent[]
+  trustedContacts TrustedContact[]   @relation("Owner")
+  contactOf       TrustedContact[]   @relation("Contact")
+  familyOwned     FamilyAccount[]    @relation("FamilyOwner")
+  familyMember    ProtectedPerson[]
+  consents        ConsentRecord[]
+  auditEvents     AuditEvent[]
+  enterpriseId    String?
+  enterprise      EnterpriseAccount? @relation(fields: [enterpriseId], references: [id])
+
+  @@index([email])
+  @@index([enterpriseId])
+}
+
+model Session {
+  id           String   @id @default(uuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshHash  String
+  userAgent    String?
+  ipAddress    String?
+  expiresAt    DateTime
+  revokedAt    DateTime?
+  createdAt    DateTime @default(now())
+
+  @@index([userId])
+}
+
+model UserRiskProfile {
+  id                 String   @id @default(uuid())
+  userId             String   @unique
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sensitivity        String   @default("balanced") // gentle | balanced | strict
+  channelsEnabled    Json     // { call: true, sms: true, ... }
+  trustedEscalation  Boolean  @default(true)
+  highRiskActionLock Boolean  @default(true)
+  updatedAt          DateTime @updatedAt
+}
+
+// =============== FAMILY ===============
+model FamilyAccount {
+  id        String   @id @default(uuid())
+  ownerId   String
+  owner     User     @relation("FamilyOwner", fields: [ownerId], references: [id])
+  name      String
+  createdAt DateTime @default(now())
+
+  protectedPersons ProtectedPerson[]
+}
+
+model ProtectedPerson {
+  id              String   @id @default(uuid())
+  familyId        String
+  family          FamilyAccount @relation(fields: [familyId], references: [id], onDelete: Cascade)
+  linkedUserId    String?
+  linkedUser      User?    @relation(fields: [linkedUserId], references: [id])
+  displayName     String
+  relationship    String?
+  elderMode       Boolean  @default(false)
+  createdAt       DateTime @default(now())
+
+  @@index([familyId])
+}
+
+model TrustedContact {
+  id           String   @id @default(uuid())
+  ownerUserId  String
+  ownerUser    User     @relation("Owner", fields: [ownerUserId], references: [id], onDelete: Cascade)
+  contactUserId String?
+  contactUser   User?   @relation("Contact", fields: [contactUserId], references: [id])
+  displayName  String
+  phone        String?
+  email        String?
+  channelPref  String   @default("sms") // sms | email | push
+  priority     Int      @default(1)
+  createdAt    DateTime @default(now())
+
+  @@index([ownerUserId])
+}
+
+// =============== SCAM EVENTS ===============
+model ScamEvent {
+  id           String        @id @default(uuid())
+  userId       String
+  user         User          @relation(fields: [userId], references: [id])
+  channel      EventChannel
+  status       EventStatus   @default(PENDING)
+  riskLevel    RiskLevel?
+  scamType     ScamType?
+  rawInputHash String        // hash of original content for dedup, NOT raw content
+  redactedSummary String?    // privacy-safe summary
+  source       String        @default("manual") // manual | passive | shared
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  deletedAt    DateTime?
+
+  artifacts     ScamEventArtifact[]
+  riskSignals   RiskSignal[]
+  intervention  Intervention?
+  escalations   Escalation[]
+  recovery      RecoveryChecklist?
+  timeline      IncidentTimelineEntry[]
+  feedback      EventFeedback[]
+  reviewItem    AnalystReviewItem?
+
+  @@index([userId, createdAt])
+  @@index([status])
+  @@index([riskLevel])
+}
+
+model ScamEventArtifact {
+  id          String   @id @default(uuid())
+  eventId     String
+  event       ScamEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  kind        String   // text | image | url | call_meta | invoice | qr
+  storageKey  String?  // S3 key (encrypted)
+  mimeType    String?
+  byteSize    Int?
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  @@index([eventId])
+}
+
+model RiskSignal {
+  id           String     @id @default(uuid())
+  eventId      String
+  event        ScamEvent  @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  type         SignalType
+  code         String     // e.g. "URGENCY_CUE", "SPOOFED_CALLER_ID"
+  label        String
+  description  String
+  weight       Float      // -1.0 .. 1.0
+  confidence   Float      // 0..1
+  uncertainty  String?
+  evidence     Json?
+  detectorName String     // detector module name
+  detectorVersion String
+  createdAt    DateTime   @default(now())
+
+  @@index([eventId])
+  @@index([code])
+}
+
+model Intervention {
+  id            String              @id @default(uuid())
+  eventId       String              @unique
+  event         ScamEvent           @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  action        InterventionAction
+  riskLevel     RiskLevel
+  scamType      ScamType
+  headline      String
+  reasons       Json                // [{ code, label }]
+  doNotDo       Json                // string[]
+  safestNext    Json                // string[]
+  verifyVia     Json                // string[]
+  uncertainty   String?
+  scoringVersion String
+  createdAt     DateTime            @default(now())
+
+  verificationSteps VerificationStep[]
+}
+
+model VerificationStep {
+  id              String       @id @default(uuid())
+  interventionId  String
+  intervention    Intervention @relation(fields: [interventionId], references: [id], onDelete: Cascade)
+  order           Int
+  instruction     String
+  channel         String       // call | website | branch | app
+  completedAt     DateTime?
+}
+
+model Escalation {
+  id             String           @id @default(uuid())
+  eventId        String
+  event          ScamEvent        @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  trustedContactId String?
+  status         EscalationStatus @default(PENDING)
+  channel        String           // sms | email | push
+  reason         String
+  acknowledgedAt DateTime?
+  closedAt       DateTime?
+  createdAt      DateTime         @default(now())
+
+  @@index([eventId])
+}
+
+model RecoveryChecklist {
+  id          String       @id @default(uuid())
+  eventId     String       @unique
+  event       ScamEvent    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  scamType    ScamType
+  createdAt   DateTime     @default(now())
+  completedAt DateTime?
+
+  tasks RecoveryTask[]
+}
+
+model RecoveryTask {
+  id          String             @id @default(uuid())
+  checklistId String
+  checklist   RecoveryChecklist  @relation(fields: [checklistId], references: [id], onDelete: Cascade)
+  order       Int
+  title       String
+  detail      String
+  category    String             // bank | password | device | report | evidence
+  status      RecoveryTaskStatus @default(PENDING)
+  completedAt DateTime?
+
+  @@index([checklistId])
+}
+
+model IncidentTimelineEntry {
+  id        String   @id @default(uuid())
+  eventId   String
+  event     ScamEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  kind      String   // created | analyzed | warning_shown | escalated | recovery_started | task_completed | feedback
+  message   String
+  payload   Json?
+  createdAt DateTime @default(now())
+
+  @@index([eventId, createdAt])
+}
+
+model EventFeedback {
+  id        String   @id @default(uuid())
+  eventId   String
+  event     ScamEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  helpful   Boolean
+  correct   Boolean?
+  notes     String?
+  createdAt DateTime @default(now())
+}
+
+// =============== POLICY ===============
+model PolicyRule {
+  id          String   @id @default(uuid())
+  scope       String   // user | family | enterprise
+  scopeId     String
+  key         String
+  value       Json
+  updatedAt   DateTime @updatedAt
+  createdAt   DateTime @default(now())
+
+  @@unique([scope, scopeId, key])
+}
+
+// =============== ENTERPRISE ===============
+model EnterpriseAccount {
+  id        String   @id @default(uuid())
+  name      String
+  slug      String   @unique
+  industry  String?
+  createdAt DateTime @default(now())
+
+  users   User[]
+  configs EnterpriseConfig[]
+}
+
+model EnterpriseConfig {
+  id           String            @id @default(uuid())
+  enterpriseId String
+  enterprise   EnterpriseAccount @relation(fields: [enterpriseId], references: [id], onDelete: Cascade)
+  key          String
+  value        Json
+  updatedAt    DateTime          @updatedAt
+
+  @@unique([enterpriseId, key])
+}
+
+model AnalystReviewItem {
+  id        String   @id @default(uuid())
+  eventId   String   @unique
+  event     ScamEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  status    String   @default("queued") // queued | reviewing | resolved
+  reviewer  String?
+  notes     String?
+  createdAt DateTime @default(now())
+}
+
+// =============== AUDIT / CONSENT / NOTIFICATIONS ===============
+model ConsentRecord {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  scope     String   // analytics | family_share | cloud_processing
+  granted   Boolean
+  version   String
+  createdAt DateTime @default(now())
+}
+
+model AuditEvent {
+  id        String   @id @default(uuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id])
+  actor     String   // user_id | system | analyst
+  action    String
+  target    String?
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([action])
+}
+
+model NotificationEvent {
+  id          String   @id @default(uuid())
+  userId      String
+  channel     String   // in_app | push | sms | email
+  title       String
+  body        String
+  payload     Json?
+  sentAt      DateTime?
+  readAt      DateTime?
+  createdAt   DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
+model SignalProvenance {
+  id              String   @id @default(uuid())
+  signalCode      String
+  detectorName    String
+  detectorVersion String
+  rulesetHash     String?
+  modelName       String?
+  modelVersion    String?
+  createdAt       DateTime @default(now())
+
+  @@unique([detectorName, detectorVersion])
+}
